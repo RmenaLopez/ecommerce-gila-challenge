@@ -1,0 +1,9 @@
+{:source-paths ["src/main"]
+ :dependencies [[reagent "1.2.0"]]
+ :builds
+ {:app
+  {:target     :browser
+   :output-dir "resources/public/js"
+   :asset-path "/js"
+   :modules    {:main {:init-fn ecommerce.core/init}}
+   :devtools   {:after-load ecommerce.core/reload}}}}

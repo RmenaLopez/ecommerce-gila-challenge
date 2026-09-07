@@ -1,0 +1,88 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ecommerce
+      POSTGRES_PASSWORD: ecommerce
+      POSTGRES_DB: ecommerce
+    ports:
+      - "5432:5432"
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ecommerce"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build: ./backend
+    environment:
+      PORT: "8080"
+      DATABASE_URL: postgres://ecommerce:ecommerce@db:5432/ecommerce?sslmode=disable
+    ports:
+      - "8080:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "8081:80"
+    profiles: ["full"]
+    depends_on:
+      - backend
+
+  test-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ecommerce
+      POSTGRES_PASSWORD: ecommerce
+      POSTGRES_DB: ecommerce_test
+    ports:
+      - "5433:5432"
+    volumes:
+      - test-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ecommerce"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    profiles: ["test"]
+
+  test-db-migrate:
+    image: migrate/migrate:v4.19.1
+    volumes:
+      - ./backend/migrations:/migrations
+    command:
+      [
+        "-path", "/migrations",
+        "-database", "postgres://ecommerce:ecommerce@test-db:5432/ecommerce_test?sslmode=disable",
+        "up",
+      ]
+    depends_on:
+      test-db:
+        condition: service_healthy
+    profiles: ["test"]
+
+  test:
+    image: golang:1.22-alpine
+    working_dir: /app
+    volumes:
+      - ./backend:/app
+      - go-mod-cache:/go/pkg/mod
+      - go-build-cache:/root/.cache/go-build
+    environment:
+      DATABASE_URL: postgres://ecommerce:ecommerce@test-db:5432/ecommerce_test?sslmode=disable
+    depends_on:
+      test-db-migrate:
+        condition: service_completed_successfully
+    command: ["go", "test", "./..."]
+    profiles: ["test"]
+
+volumes:
+  db-data:
+  test-db-data:
+  go-mod-cache:
+  go-build-cache:
