@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"strings"
 
 	"ecommerce-backend/internal/domain"
 	"ecommerce-backend/internal/repository"
@@ -16,6 +17,11 @@ func NewProductService(repo repository.ProductRepository) *ProductService {
 }
 
 func (s *ProductService) Create(ctx context.Context, p *domain.Product) error {
+	p.SKU = strings.TrimSpace(p.SKU)
+	if p.SKU == "" {
+		return domain.ErrInvalidInput
+	}
+
 	return s.repo.Create(ctx, p)
 }
 

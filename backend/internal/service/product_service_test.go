@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"ecommerce-backend/internal/domain"
@@ -9,12 +10,17 @@ import (
 )
 
 // fakeProductRepository is a test double satisfying repository.ProductRepository.
-// It only records what SearchByName received; every other method is an unused stub.
+// It only records what SearchByName/Create received; every other method is an unused stub.
 type fakeProductRepository struct {
 	receivedFilter repository.ProductFilter
+
+	createCalled bool
 }
 
-func (f *fakeProductRepository) Create(ctx context.Context, p *domain.Product) error { return nil }
+func (f *fakeProductRepository) Create(ctx context.Context, p *domain.Product) error {
+	f.createCalled = true
+	return nil
+}
 func (f *fakeProductRepository) GetByID(ctx context.Context, id string) (*domain.Product, error) {
 	return nil, nil
 }
@@ -68,5 +74,48 @@ func TestProductService_SearchByName_ClampsLimitAndOffset(t *testing.T) {
 				t.Errorf("Offset = %d, want %d", repo.receivedFilter.Offset, c.wantOffset)
 			}
 		})
+	}
+}
+
+func TestProductService_Create_RequiresSKU(t *testing.T) {
+	cases := []struct {
+		name string
+		sku  string
+	}{
+		{"empty sku", ""},
+		{"whitespace-only sku", "   "},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			repo := &fakeProductRepository{}
+			svc := NewProductService(repo)
+
+			err := svc.Create(context.Background(), &domain.Product{SKU: c.sku, Name: "Test Product"})
+
+			if !errors.Is(err, domain.ErrInvalidInput) {
+				t.Errorf("err = %v, want domain.ErrInvalidInput", err)
+			}
+			if repo.createCalled {
+				t.Error("expected repository.Create not to be called for an invalid SKU")
+			}
+		})
+	}
+}
+
+func TestProductService_Create_TrimsSKU(t *testing.T) {
+	repo := &fakeProductRepository{}
+	svc := NewProductService(repo)
+
+	p := &domain.Product{SKU: "  RS-001  ", Name: "Test Product"}
+	if err := svc.Create(context.Background(), p); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if p.SKU != "RS-001" {
+		t.Errorf("SKU = %q, want trimmed %q", p.SKU, "RS-001")
+	}
+	if !repo.createCalled {
+		t.Error("expected repository.Create to be called for a valid SKU")
 	}
 }

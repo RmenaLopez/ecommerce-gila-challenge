@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"strings"
 	"time"
 
@@ -34,6 +35,10 @@ func (r *ProductRepository) Create(ctx context.Context, p *domain.Product) error
 		p.SKU, p.Name, p.Description, p.Category, p.PriceCents, p.Stock, p.WeightKg,
 	).Scan(&p.ID, &p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" { // unique_violation
+			return domain.ErrConflict
+		}
 		return fmt.Errorf("creating product: %w", err)
 	}
 
@@ -61,7 +66,7 @@ func (r *ProductRepository) GetByID(ctx context.Context, id string) (*domain.Pro
 }
 
 func (r *ProductRepository) GetBySKU(ctx context.Context, sku string) (*domain.Product, error) {
-	const query = "SELECT id, sku, name, description, category, price_cents, stock, weight_kg, created_at, updated_at" +
+	const query = "SELECT id::text, sku, name, description, category, price_cents, stock, weight_kg, created_at, updated_at " +
 		"FROM products " +
 		"WHERE sku = $1"
 	var p domain.Product
@@ -74,7 +79,7 @@ func (r *ProductRepository) GetBySKU(ctx context.Context, sku string) (*domain.P
 		return nil, domain.ErrNotFound
 	}
 	if err != nil {
-		return nil, fmt.Errorf("querying product by id: %w", err)
+		return nil, fmt.Errorf("querying product by sku: %w", err)
 	}
 
 	return &p, nil
@@ -90,11 +95,11 @@ func (r *ProductRepository) Update(ctx context.Context, p *domain.Product) error
 		"weight_kg = $7, " +
 		"updated_at = $8 " +
 		"WHERE id = $1 " +
-		"RETURNING updated_at"
+		"RETURNING sku, created_at, updated_at"
 	updateDate := time.Now()
 	err := r.pool.QueryRow(ctx, query,
 		p.ID, p.Name, p.Description, p.Category, p.PriceCents, p.Stock, p.WeightKg, updateDate).Scan(
-		&p.UpdatedAt,
+		&p.SKU, &p.CreatedAt, &p.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.ErrNotFound

@@ -2,6 +2,7 @@ package postgres_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"testing"
@@ -102,4 +103,161 @@ func TestProductRepository_BulkUpsert(t *testing.T) {
 			t.Errorf("updated_at (%v) should be after created_at (%v)", updatedAt, createdAt)
 		}
 	})
+}
+
+func TestProductRepository_Create_DuplicateSKU(t *testing.T) {
+	pool := mustTestPool(t)
+	repo := postgres.NewProductRepository(pool)
+	ctx := context.Background()
+
+	sku := fmt.Sprintf("TEST-CREATE-%d", time.Now().UnixNano())
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, "DELETE FROM products WHERE sku = $1", sku)
+	})
+
+	first := domain.Product{SKU: sku, Name: "Original", Category: "Test", PriceCents: 1000, Stock: 5, WeightKg: 1}
+	if err := repo.Create(ctx, &first); err != nil {
+		t.Fatalf("first Create: %v", err)
+	}
+
+	second := domain.Product{SKU: sku, Name: "Duplicate", Category: "Test", PriceCents: 2000, Stock: 9, WeightKg: 1}
+	err := repo.Create(ctx, &second)
+
+	if !errors.Is(err, domain.ErrConflict) {
+		t.Errorf("err = %v, want domain.ErrConflict", err)
+	}
+}
+
+func TestProductRepository_Update(t *testing.T) {
+	pool := mustTestPool(t)
+	repo := postgres.NewProductRepository(pool)
+	ctx := context.Background()
+
+	sku := fmt.Sprintf("TEST-UPDATE-%d", time.Now().UnixNano())
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, "DELETE FROM products WHERE sku = $1", sku)
+	})
+
+	original := domain.Product{SKU: sku, Name: "Original", Category: "Test", PriceCents: 1000, Stock: 5, WeightKg: 1}
+	if err := repo.Create(ctx, &original); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	time.Sleep(10 * time.Millisecond) // guarantee updated_at can't tie with created_at
+
+	update := domain.Product{
+		ID: original.ID, SKU: "SOMETHING-ELSE", Name: "Updated", Category: "Updated Category",
+		PriceCents: 2000, Stock: 9, WeightKg: 2,
+	}
+	if err := repo.Update(ctx, &update); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	if update.Name != "Updated" || update.Category != "Updated Category" || update.PriceCents != 2000 || update.Stock != 9 {
+		t.Errorf("mutable fields not applied: %+v", update)
+	}
+	if update.SKU != sku {
+		t.Errorf("SKU = %q, want unchanged %q (SKU is immutable via Update)", update.SKU, sku)
+	}
+	if !update.CreatedAt.Equal(original.CreatedAt) {
+		t.Errorf("CreatedAt changed: got %v, want unchanged %v", update.CreatedAt, original.CreatedAt)
+	}
+	if !update.UpdatedAt.After(update.CreatedAt) {
+		t.Errorf("UpdatedAt (%v) should be after CreatedAt (%v)", update.UpdatedAt, update.CreatedAt)
+	}
+
+	var dbSKU string
+	if err := pool.QueryRow(ctx, "SELECT sku FROM products WHERE id = $1", original.ID).Scan(&dbSKU); err != nil {
+		t.Fatalf("fetching row: %v", err)
+	}
+	if dbSKU != sku {
+		t.Errorf("sku in database = %q, want unchanged %q", dbSKU, sku)
+	}
+}
+
+func TestProductRepository_Update_NotFound(t *testing.T) {
+	pool := mustTestPool(t)
+	repo := postgres.NewProductRepository(pool)
+	ctx := context.Background()
+
+	err := repo.Update(ctx, &domain.Product{ID: "00000000-0000-0000-0000-000000000000", Name: "Nope"})
+
+	if !errors.Is(err, domain.ErrNotFound) {
+		t.Errorf("err = %v, want domain.ErrNotFound", err)
+	}
+}
+
+func TestProductRepository_Delete(t *testing.T) {
+	pool := mustTestPool(t)
+	repo := postgres.NewProductRepository(pool)
+	ctx := context.Background()
+
+	sku := fmt.Sprintf("TEST-DELETE-%d", time.Now().UnixNano())
+	product := domain.Product{SKU: sku, Name: "To Be Deleted", Category: "Test", PriceCents: 1000, Stock: 5, WeightKg: 1}
+	if err := repo.Create(ctx, &product); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	if err := repo.Delete(ctx, product.ID); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+
+	var count int
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM products WHERE id = $1", product.ID).Scan(&count); err != nil {
+		t.Fatalf("counting rows: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("row still exists after Delete")
+	}
+}
+
+func TestProductRepository_Delete_NotFound(t *testing.T) {
+	pool := mustTestPool(t)
+	repo := postgres.NewProductRepository(pool)
+	ctx := context.Background()
+
+	err := repo.Delete(ctx, "00000000-0000-0000-0000-000000000000")
+
+	if !errors.Is(err, domain.ErrNotFound) {
+		t.Errorf("err = %v, want domain.ErrNotFound", err)
+	}
+}
+
+func TestProductRepository_GetBySKU(t *testing.T) {
+	pool := mustTestPool(t)
+	repo := postgres.NewProductRepository(pool)
+	ctx := context.Background()
+
+	sku := fmt.Sprintf("TEST-GETBYSKU-%d", time.Now().UnixNano())
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, "DELETE FROM products WHERE sku = $1", sku)
+	})
+
+	created := domain.Product{SKU: sku, Name: "Findable", Category: "Test", PriceCents: 1000, Stock: 5, WeightKg: 1}
+	if err := repo.Create(ctx, &created); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	found, err := repo.GetBySKU(ctx, sku)
+	if err != nil {
+		t.Fatalf("GetBySKU: %v", err)
+	}
+	if found.ID != created.ID {
+		t.Errorf("ID = %q, want %q", found.ID, created.ID)
+	}
+	if found.Name != "Findable" {
+		t.Errorf("Name = %q, want %q", found.Name, "Findable")
+	}
+}
+
+func TestProductRepository_GetBySKU_NotFound(t *testing.T) {
+	pool := mustTestPool(t)
+	repo := postgres.NewProductRepository(pool)
+	ctx := context.Background()
+
+	_, err := repo.GetBySKU(ctx, "NO-SUCH-SKU")
+
+	if !errors.Is(err, domain.ErrNotFound) {
+		t.Errorf("err = %v, want domain.ErrNotFound", err)
+	}
 }

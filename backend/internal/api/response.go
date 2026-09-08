@@ -28,6 +28,8 @@ func writeServiceError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusNotFound, "not found")
 	case errors.Is(err, domain.ErrInvalidInput):
 		writeError(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, domain.ErrConflict):
+		writeError(w, http.StatusConflict, "sku already exists")
 	default:
 		slog.Error("internal error", "error", err)
 		writeError(w, http.StatusInternalServerError, "internal server error")
