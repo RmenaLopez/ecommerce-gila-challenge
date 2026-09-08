@@ -6,7 +6,7 @@ services:
       POSTGRES_PASSWORD: ecommerce
       POSTGRES_DB: ecommerce
     ports:
-      - "5432:5432"
+      - "5434:5432" # not 5432 on the host: commonly already taken by another local Postgres
     volumes:
       - db-data:/var/lib/postgresql/data
     healthcheck:

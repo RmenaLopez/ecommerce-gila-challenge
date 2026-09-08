@@ -6,7 +6,7 @@ An "enterprise-grade" e-commerce app built as a technical take-home: product CRU
 
 ## Status
 
-In progress — `ProductRepository`'s full CRUD (`Create`, `GetByID`, `GetBySKU`, `Update`, `Delete`), `SearchByName`, and `BulkUpsert` are implemented and verified against real Postgres. Still stubbed or not started: CSV import (`ImportService.ImportCSV`), the purchase flow, every HTTP handler beyond `/healthz`, and the whole frontend UI. A Dockerized test pipeline (`docker compose --profile test run --rm test`) has a couple of tests in it so far — see "Tests are written when logic is genuinely risky" below. The immediate next piece is wiring up the HTTP handlers, currently all stubbed. See `progress-log.md` at the repo root for the running dev log.
+In progress — `ProductRepository`'s full CRUD (`Create`, `GetByID`, `GetBySKU`, `Update`, `Delete`), `SearchByName`, and `BulkUpsert` are implemented and verified against real Postgres. `GET /products/{id}` is the first wired-up, working HTTP handler, verified end-to-end against the real running server (`docker compose up db backend`) — the rest of the product handlers, CSV import, the purchase flow, and the whole frontend UI are still stubbed or not started. A Dockerized test pipeline (`docker compose --profile test run --rm test`) has a couple of tests in it so far — see "Tests are written when logic is genuinely risky" below. See `progress-log.md` at the repo root for the running dev log.
 
 ## Prerequisites
 
@@ -48,7 +48,7 @@ docker compose --profile full up --build
 
 ```
 cd backend
-export DATABASE_URL=postgres://ecommerce:ecommerce@localhost:5432/ecommerce?sslmode=disable
+export DATABASE_URL=postgres://ecommerce:ecommerce@localhost:5434/ecommerce?sslmode=disable
 go run ./cmd/api
 ```
 
@@ -159,9 +159,19 @@ Native `go test`/`go run` on this development machine crashes with `dyld: missin
 
 `test-db` is a fully separate Postgres container from the dev `db` service — not just a second database name on the same server. A shared-database approach was considered and deliberately rejected in favor of the more production-realistic separation, independent of whether this project's current size strictly required it — see the fuller reasoning in `knowledge/docker-test-pipeline.md`.
 
+### Product JSON responses expose `price_cents` directly — no separate DTO layer
+
+HTTP handlers serialize `domain.Product` straight to JSON; there's no separate request/response type translating cents to a decimal `price` field. Considered adding one (a `ProductResponse` type presenting `"price": 89.99`), which is the more conventional-looking REST shape, but decided against it for this project's size — it only adds mapping code with no functional benefit yet, since nothing currently needs the domain model and wire format to diverge. Precedent for exposing amounts in the smallest currency unit directly: Stripe's API does the same (amounts in cents), specifically to avoid float/decimal ambiguity — this isn't just a shortcut, it's a legitimate real-world convention. If a reason to diverge the wire format from the domain model shows up later, this is the seam where a DTO layer would get introduced.
+
+### Shared `writeServiceError` helper for HTTP error mapping
+
+Every handler funnels errors from the service layer through one function (`internal/api/response.go`) rather than hand-rolling its own status-code logic: `domain.ErrNotFound` → `404`, `domain.ErrInvalidInput` → `400`, anything else → `500` (logged server-side via `slog`, but not leaked to the client — an unexpected error's message could include internal details like SQL text). Built this alongside the first real handler (`GET /products/{id}`) specifically because every subsequent handler reuses it; verified end-to-end against the real running server, including the 200 and 404 paths.
+
+Verifying it live surfaced a real gap, not yet fixed: a malformed (non-UUID) `id` currently returns `500`, not `400` — see Known Gaps below.
+
 ## Known gaps
 
-- No input validation anywhere yet (empty SKU, negative price/stock, etc. would currently reach the database uncaught in most paths).
+- No input validation anywhere yet (empty SKU, negative price/stock, etc. would currently reach the database uncaught in most paths). Concretely observed: `GET /products/{id}` with a malformed (non-UUID) id currently returns `500 Internal Server Error` instead of `400 Bad Request` — Postgres rejects the invalid UUID before the query can ever reach "not found," and that raw error falls through `writeServiceError`'s default case. Not yet decided where ID-format validation should live (handler vs. service).
 - No handling of duplicate-SKU conflicts as a distinct error from "something broke" outside of `BulkUpsert` (which upserts by design; `Create` would still surface a raw unique-violation error).
 - `GetBySKU` has a known SQL-string-concatenation bug (missing space produces invalid SQL) and a copy-pasted wrong error message — left as-is deliberately for now, not yet fixed.
 - Test coverage is intentionally selective (see "Tests are written when logic is genuinely risky" above) — most `ProductService`/`ProductRepository` methods don't have tests yet, and none of the not-yet-implemented features (CSV import, purchase flow, handlers) do either.

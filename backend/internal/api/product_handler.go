@@ -11,7 +11,15 @@ func (s *Server) handleCreateProduct(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleGetProduct(w http.ResponseWriter, r *http.Request) {
-	writeError(w, http.StatusNotImplemented, "not implemented")
+	id := r.PathValue("id")
+
+	product, err := s.products.Get(r.Context(), id)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, product)
 }
 
 func (s *Server) handleUpdateProduct(w http.ResponseWriter, r *http.Request) {
