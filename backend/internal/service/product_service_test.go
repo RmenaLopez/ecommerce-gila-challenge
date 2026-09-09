@@ -10,11 +10,15 @@ import (
 )
 
 // fakeProductRepository is a test double satisfying repository.ProductRepository.
-// It only records what SearchByName/Create received; every other method is an unused stub.
+// It only records what SearchByName/Create/BulkUpsert received; every other
+// method is an unused stub.
 type fakeProductRepository struct {
 	receivedFilter repository.ProductFilter
 
-	createCalled bool
+	createCalled       bool
+	updateCalled       bool
+	bulkUpsertProducts []domain.Product
+	receivedSKU        string
 }
 
 func (f *fakeProductRepository) Create(ctx context.Context, p *domain.Product) error {
@@ -25,11 +29,16 @@ func (f *fakeProductRepository) GetByID(ctx context.Context, id string) (*domain
 	return nil, nil
 }
 func (f *fakeProductRepository) GetBySKU(ctx context.Context, sku string) (*domain.Product, error) {
+	f.receivedSKU = sku
 	return nil, nil
 }
-func (f *fakeProductRepository) Update(ctx context.Context, p *domain.Product) error { return nil }
+func (f *fakeProductRepository) Update(ctx context.Context, p *domain.Product) error {
+	f.updateCalled = true
+	return nil
+}
 func (f *fakeProductRepository) Delete(ctx context.Context, id string) error         { return nil }
 func (f *fakeProductRepository) BulkUpsert(ctx context.Context, products []domain.Product) error {
+	f.bulkUpsertProducts = products
 	return nil
 }
 
@@ -117,5 +126,88 @@ func TestProductService_Create_TrimsSKU(t *testing.T) {
 	}
 	if !repo.createCalled {
 		t.Error("expected repository.Create to be called for a valid SKU")
+	}
+}
+
+func TestProductService_Create_RejectsInvalidFields(t *testing.T) {
+	cases := []struct {
+		name    string
+		product domain.Product
+	}{
+		{"empty name", domain.Product{SKU: "SKU-1", Name: ""}},
+		{"negative price", domain.Product{SKU: "SKU-1", Name: "Widget", PriceCents: -1}},
+		{"negative stock", domain.Product{SKU: "SKU-1", Name: "Widget", Stock: -1}},
+		{"negative weight", domain.Product{SKU: "SKU-1", Name: "Widget", WeightKg: -1}},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			repo := &fakeProductRepository{}
+			svc := NewProductService(repo)
+
+			err := svc.Create(context.Background(), &c.product)
+
+			if !errors.Is(err, domain.ErrInvalidInput) {
+				t.Errorf("err = %v, want domain.ErrInvalidInput", err)
+			}
+			if repo.createCalled {
+				t.Error("expected repository.Create not to be called for an invalid product")
+			}
+		})
+	}
+}
+
+func TestProductService_Update_DoesNotRequireSKU(t *testing.T) {
+	repo := &fakeProductRepository{}
+	svc := NewProductService(repo)
+
+	// SKU is immutable via Update — a request body that omits it (or sends
+	// something different) must still be accepted.
+	p := &domain.Product{ID: "some-id", SKU: "", Name: "Widget", PriceCents: 1000, Stock: 5}
+	if err := svc.Update(context.Background(), p); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !repo.updateCalled {
+		t.Error("expected repository.Update to be called")
+	}
+}
+
+func TestProductService_Update_RejectsInvalidFields(t *testing.T) {
+	cases := []struct {
+		name    string
+		product domain.Product
+	}{
+		{"empty name", domain.Product{ID: "some-id", Name: ""}},
+		{"negative price", domain.Product{ID: "some-id", Name: "Widget", PriceCents: -1}},
+		{"negative stock", domain.Product{ID: "some-id", Name: "Widget", Stock: -1}},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			repo := &fakeProductRepository{}
+			svc := NewProductService(repo)
+
+			err := svc.Update(context.Background(), &c.product)
+
+			if !errors.Is(err, domain.ErrInvalidInput) {
+				t.Errorf("err = %v, want domain.ErrInvalidInput", err)
+			}
+			if repo.updateCalled {
+				t.Error("expected repository.Update not to be called for an invalid product")
+			}
+		})
+	}
+}
+
+func TestProductService_GetBySKU_TrimsInput(t *testing.T) {
+	repo := &fakeProductRepository{}
+	svc := NewProductService(repo)
+
+	if _, err := svc.GetBySKU(context.Background(), "  RS-001  "); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if repo.receivedSKU != "RS-001" {
+		t.Errorf("repo received SKU = %q, want trimmed %q", repo.receivedSKU, "RS-001")
 	}
 }

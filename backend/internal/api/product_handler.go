@@ -5,10 +5,35 @@ import (
 	"net/http"
 
 	"ecommerce-backend/internal/domain"
+	"ecommerce-backend/internal/repository"
 )
 
 func (s *Server) handleSearchProducts(w http.ResponseWriter, r *http.Request) {
-	writeError(w, http.StatusNotImplemented, "not implemented")
+	query := r.URL.Query()
+
+	limit, ok := parseIntParam(w, query, "limit")
+	if !ok {
+		return
+	}
+	offset, ok := parseIntParam(w, query, "offset")
+	if !ok {
+		return
+	}
+
+	filter := repository.ProductFilter{
+		SearchQuery: query.Get("q"),
+		Category:    query.Get("category"),
+		Limit:       limit,
+		Offset:      offset,
+	}
+
+	products, err := s.products.SearchByName(r.Context(), filter)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, products)
 }
 
 func (s *Server) handleCreateProduct(w http.ResponseWriter, r *http.Request) {
@@ -34,6 +59,22 @@ func (s *Server) handleGetProduct(w http.ResponseWriter, r *http.Request) {
 	}
 
 	product, err := s.products.Get(r.Context(), id)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, product)
+}
+
+func (s *Server) handleGetProductBySKU(w http.ResponseWriter, r *http.Request) {
+	sku := r.PathValue("sku")
+	if sku == "" {
+		writeError(w, http.StatusBadRequest, "invalid sku")
+		return
+	}
+
+	product, err := s.products.GetBySKU(r.Context(), sku)
 	if err != nil {
 		writeServiceError(w, err)
 		return

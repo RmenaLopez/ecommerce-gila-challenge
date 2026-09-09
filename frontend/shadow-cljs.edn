@@ -1,9 +1,18 @@
-{:source-paths ["src/main"]
- :dependencies [[reagent "1.2.0"]]
+{:source-paths ["src/main" "test"]
+ :dependencies [[reagent "1.2.0"]
+                [re-frame "1.4.7"]
+                [day8.re-frame/http-fx "0.2.4"]
+                [metosin/reitit-frontend "0.7.2"]]
+ :dev-http {8021 "resources/public"}
  :builds
  {:app
   {:target     :browser
    :output-dir "resources/public/js"
    :asset-path "/js"
    :modules    {:main {:init-fn ecommerce.core/init}}
-   :devtools   {:after-load ecommerce.core/reload}}}}
+   :devtools   {:after-load ecommerce.core/reload}}
+
+  :test
+  {:target    :node-test
+   :output-to "target/test.js"
+   :autorun   true}}}

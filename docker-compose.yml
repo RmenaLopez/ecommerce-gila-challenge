@@ -15,6 +15,20 @@ services:
       timeout: 5s
       retries: 5
 
+  db-migrate:
+    image: migrate/migrate:v4.19.1
+    volumes:
+      - ./backend/migrations:/migrations
+    command:
+      [
+        "-path", "/migrations",
+        "-database", "postgres://ecommerce:ecommerce@db:5432/ecommerce?sslmode=disable",
+        "up",
+      ]
+    depends_on:
+      db:
+        condition: service_healthy
+
   backend:
     build: ./backend
     environment:
@@ -23,8 +37,8 @@ services:
     ports:
       - "8080:8080"
     depends_on:
-      db:
-        condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
 
   frontend:
     build: ./frontend

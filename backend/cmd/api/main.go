@@ -43,10 +43,10 @@ func run() error {
 
 	productService := service.NewProductService(productRepo)
 	importService := service.NewImportService(productRepo)
-	orderService := service.NewOrderService(productRepo, orderRepo)
+	orderService := service.NewOrderService(orderRepo)
 
 	server := api.NewServer(productService, importService, orderService)
-	handler := middleware.Recover(middleware.Logging(server.Routes()))
+	handler := middleware.Recover(middleware.Logging(middleware.CORS(server.Routes())))
 
 	httpServer := &http.Server{
 		Addr:         ":" + cfg.Port,
