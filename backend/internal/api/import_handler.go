@@ -10,7 +10,13 @@ func (s *Server) handleImportProducts(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 
-	result, err := s.imports.ImportCSV(r.Context(), file)
+	// "mode" is an optional multipart form field alongside "file": "overwrite"
+	// replaces an existing product's stock outright, anything else (missing
+	// field included) adds to it — add is the safer default, since it can't
+	// silently erase stock someone else added between exports.
+	addToStock := r.FormValue("mode") != "overwrite"
+
+	result, err := s.imports.ImportCSV(r.Context(), file, addToStock)
 	if err != nil {
 		writeServiceError(w, err)
 		return

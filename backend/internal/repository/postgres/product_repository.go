@@ -138,7 +138,14 @@ func (r *ProductRepository) SearchByName(ctx context.Context, filter repository.
 
 	queryArgN := 0
 	if filter.SearchQuery != "" {
-		conditions = append(conditions, fmt.Sprintf("name %% $%d", argN))
+		// %> (word-similarity) rather than % (whole-string similarity): %
+		// compares the query against the *entire* name, so a short query
+		// like "Camp" scores too low against a longer name like "Camping
+		// Chair" to pass the default threshold (0.2857, just under 0.3) —
+		// verified against the real data. %> checks the query against the
+		// best-matching *substring* of the name instead (0.8 for the same
+		// pair), which is the behavior an actual search box needs.
+		conditions = append(conditions, fmt.Sprintf("name %%> $%d", argN))
 		args = append(args, filter.SearchQuery)
 		queryArgN = argN
 		argN++
@@ -149,7 +156,11 @@ func (r *ProductRepository) SearchByName(ctx context.Context, filter repository.
 	}
 
 	if queryArgN > 0 {
-		query += fmt.Sprintf(" ORDER BY similarity(name, $%d) DESC", queryArgN)
+		// word_similarity's arguments aren't interchangeable like %>'s are
+		// — it must be (query, name), not (name, query), or it silently
+		// scores the reversed, wrong comparison (verified: 0.8 vs 0.3077
+		// for the same pair, swapped).
+		query += fmt.Sprintf(" ORDER BY word_similarity($%d, name) DESC", queryArgN)
 	} else {
 		query += " ORDER BY name ASC"
 	}
@@ -181,18 +192,23 @@ func (r *ProductRepository) SearchByName(ctx context.Context, filter repository.
 	return products, nil
 }
 
-func (r *ProductRepository) BulkUpsert(ctx context.Context, products []domain.Product) error {
+func (r *ProductRepository) BulkUpsert(ctx context.Context, products []domain.Product, addToStock bool) error {
 	if len(products) == 0 {
 		return nil
 	}
 
+	stockClause := "stock = EXCLUDED.stock"
+	if addToStock {
+		stockClause = "stock = products.stock + EXCLUDED.stock"
+	}
+
 	const columnsPerRow = 7
-	const updateClause = " ON CONFLICT (sku) DO UPDATE SET " +
+	updateClause := " ON CONFLICT (sku) DO UPDATE SET " +
 		"name = EXCLUDED.name, " +
 		"description = EXCLUDED.description, " +
 		"category = EXCLUDED.category, " +
 		"price_cents = EXCLUDED.price_cents, " +
-		"stock = EXCLUDED.stock, " +
+		stockClause + ", " +
 		"weight_kg = EXCLUDED.weight_kg, " +
 		"updated_at = now()"
 

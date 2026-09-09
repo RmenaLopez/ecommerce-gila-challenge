@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"ecommerce-backend/internal/domain"
+	"ecommerce-backend/internal/repository"
 	"ecommerce-backend/internal/repository/postgres"
 )
 
@@ -60,7 +61,7 @@ func TestProductRepository_BulkUpsert(t *testing.T) {
 	t.Run("inserts a new product", func(t *testing.T) {
 		err := repo.BulkUpsert(ctx, []domain.Product{
 			{SKU: sku, Name: "Test Product", Category: "Test", PriceCents: 1000, Stock: 5, WeightKg: 1},
-		})
+		}, false)
 		if err != nil {
 			t.Fatalf("BulkUpsert: %v", err)
 		}
@@ -77,14 +78,14 @@ func TestProductRepository_BulkUpsert(t *testing.T) {
 		}
 	})
 
-	t.Run("updates the existing product on conflict", func(t *testing.T) {
+	t.Run("updates the existing product on conflict (addToStock=false replaces stock)", func(t *testing.T) {
 		_, _, firstCreatedAt, _ := fetchRow(t)
 
 		time.Sleep(10 * time.Millisecond) // guarantee updated_at can't tie with the first insert's timestamp
 
 		err := repo.BulkUpsert(ctx, []domain.Product{
 			{SKU: sku, Name: "Test Product", Category: "Test", PriceCents: 2000, Stock: 9, WeightKg: 1},
-		})
+		}, false)
 		if err != nil {
 			t.Fatalf("BulkUpsert: %v", err)
 		}
@@ -94,13 +95,28 @@ func TestProductRepository_BulkUpsert(t *testing.T) {
 			t.Errorf("price_cents = %d, want 2000 (should have been updated)", priceCents)
 		}
 		if stock != 9 {
-			t.Errorf("stock = %d, want 9 (should have been updated)", stock)
+			t.Errorf("stock = %d, want 9 (should have been replaced outright, not added to)", stock)
 		}
 		if !createdAt.Equal(firstCreatedAt) {
 			t.Errorf("created_at changed on update: got %v, want unchanged %v", createdAt, firstCreatedAt)
 		}
 		if !updatedAt.After(createdAt) {
 			t.Errorf("updated_at (%v) should be after created_at (%v)", updatedAt, createdAt)
+		}
+	})
+
+	t.Run("updates the existing product on conflict (addToStock=true adds to stock)", func(t *testing.T) {
+		// Picks up where the previous subtest left off: stock is currently 9.
+		err := repo.BulkUpsert(ctx, []domain.Product{
+			{SKU: sku, Name: "Test Product", Category: "Test", PriceCents: 2000, Stock: 4, WeightKg: 1},
+		}, true)
+		if err != nil {
+			t.Fatalf("BulkUpsert: %v", err)
+		}
+
+		_, stock, _, _ := fetchRow(t)
+		if stock != 13 { // 9 (existing) + 4 (incoming) — not replaced with 4
+			t.Errorf("stock = %d, want 13 (existing stock + incoming, not replaced)", stock)
 		}
 	})
 }
@@ -259,5 +275,49 @@ func TestProductRepository_GetBySKU_NotFound(t *testing.T) {
 
 	if !errors.Is(err, domain.ErrNotFound) {
 		t.Errorf("err = %v, want domain.ErrNotFound", err)
+	}
+}
+
+// A regression test for a real bug found live: a short prefix of a longer
+// product name (e.g. "Camp" against "Camping Chair") failed to match at
+// all. Root cause was using pg_trgm's whole-string similarity (the % op)
+// instead of word/substring similarity (%>) — verified manually against
+// real data that "Camp" scores 0.2857 (just under the 0.3 default
+// threshold) as a whole-string comparison against "Camping Chair", but 0.8
+// as a word-similarity comparison. Uses a unique, made-up token rather than
+// a real word so this can't accidentally pass by matching unrelated data
+// already in the shared test database.
+func TestProductRepository_SearchByName_PrefixMatch(t *testing.T) {
+	pool := mustTestPool(t)
+	repo := postgres.NewProductRepository(pool)
+	ctx := context.Background()
+
+	unique := fmt.Sprintf("Zqxvglorp%d", time.Now().UnixNano())
+	sku := fmt.Sprintf("TEST-SEARCH-%d", time.Now().UnixNano())
+	name := unique + " Camping Chair"
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, "DELETE FROM products WHERE sku = $1", sku)
+	})
+
+	created := domain.Product{SKU: sku, Name: name, Category: "Test", PriceCents: 1000, Stock: 5, WeightKg: 1}
+	if err := repo.Create(ctx, &created); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	prefix := unique[:13] // a short prefix of the full name, not the whole thing
+
+	results, err := repo.SearchByName(ctx, repository.ProductFilter{SearchQuery: prefix, Limit: 20})
+	if err != nil {
+		t.Fatalf("SearchByName: %v", err)
+	}
+
+	var found bool
+	for _, p := range results {
+		if p.SKU == sku {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected prefix search %q to find product named %q, got %d result(s)", prefix, name, len(results))
 	}
 }

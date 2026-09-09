@@ -42,16 +42,72 @@
 ;; run on these two fixed local ports during development.
 (def api-base "http://localhost:8080")
 
+;; Always passes the current page's limit/offset explicitly — omitting them
+;; entirely is what originally hid this gap: the backend silently defaults
+;; to limit=20 with no total count in the response, so a product created
+;; past the first page just never showed up in the list at all.
+;; js/encodeURIComponent escapes q/category for safe use inside a URL —
+;; needed now that they're free-text search input rather than plain numbers
+;; like limit/offset; a category value like "Home & Office" (a real one in
+;; the sample CSV) would otherwise corrupt the query string's structure.
 (defn fetch-products
   [{:keys [db]} _]
-  {:db         (assoc db :loading? true :error nil)
-   :http-xhrio {:method          :get
-                :uri             (str api-base "/products")
-                :response-format (ajax/json-response-format {:keywords? true})
-                :on-success      [:products-loaded]
-                :on-failure      [:products-load-failed]}})
+  (let [{:keys [limit offset q category]} (:products-page db)]
+    {:db         (assoc db :loading? true :error nil)
+     :http-xhrio {:method          :get
+                  :uri             (str api-base "/products"
+                                        "?limit=" limit
+                                        "&offset=" offset
+                                        "&q=" (js/encodeURIComponent q)
+                                        "&category=" (js/encodeURIComponent category))
+                  :response-format (ajax/json-response-format {:keywords? true})
+                  :on-success      [:products-loaded]
+                  :on-failure      [:products-load-failed]}}))
 
 (rf/reg-event-fx :fetch-products fetch-products)
+
+;; The backend never reports a total count, so "is there a next page" is
+;; inferred in the view (see products-page in views.cljs) by comparing how
+;; many products actually came back against the page size, not tracked here.
+(defn next-page
+  [{:keys [db]} _]
+  {:db       (update-in db [:products-page :offset] + (get-in db [:products-page :limit]))
+   :dispatch [:fetch-products]})
+
+(rf/reg-event-fx :next-page next-page)
+
+(defn prev-page
+  [{:keys [db]} _]
+  {:db       (update-in db [:products-page :offset]
+                         (fn [offset] (max 0 (- offset (get-in db [:products-page :limit])))))
+   :dispatch [:fetch-products]})
+
+(rf/reg-event-fx :prev-page prev-page)
+
+;; Submit-triggered, not live-search-as-you-type — see README's decisions
+;; section for why (mostly a time-constraint call, not a strong opinion that
+;; this is the only right answer). Resets :offset back to 0: staying on
+;; whatever page you were browsing before would otherwise land you
+;; mid-way through a completely different result set.
+(defn search-products
+  [{:keys [db]} [_ q category]]
+  {:db       (-> db
+                 (assoc-in [:products-page :q] q)
+                 (assoc-in [:products-page :category] category)
+                 (assoc-in [:products-page :offset] 0))
+   :dispatch [:fetch-products]})
+
+(rf/reg-event-fx :search-products search-products)
+
+(defn clear-search
+  [{:keys [db]} _]
+  {:db       (-> db
+                 (assoc-in [:products-page :q] "")
+                 (assoc-in [:products-page :category] "")
+                 (assoc-in [:products-page :offset] 0))
+   :dispatch [:fetch-products]})
+
+(rf/reg-event-fx :clear-search clear-search)
 
 (defn products-loaded
   [db [_ products]]
@@ -217,3 +273,92 @@
       (assoc-in [:checkout :problems] (get-in error [:response :problems] []))))
 
 (rf/reg-event-db :checkout-failed checkout-failed)
+
+;; --- CSV import ---
+
+;; A CSV upload isn't JSON, so it can't use :params + :format like every
+;; other request here — the backend's handler reads a multipart file field
+;; (r.FormFile("file")), which means the browser needs to send a real
+;; multipart/form-data body. js/FormData is the browser API for building
+;; exactly that; handing it to :body (instead of :params) tells http-xhrio
+;; "send this body as-is" — the browser then sets the correct
+;; multipart/form-data Content-Type (with its required boundary) on its own,
+;; the same way it would for a plain HTML <form> file upload.
+;; mode is an extra plain field alongside the file itself — the backend
+;; reads it via r.FormValue("mode") (see import_handler.go), same FormData
+;; object, just a second .append instead of a file.
+(defn- file->form-data [file mode]
+  (doto (js/FormData.)
+    (.append "file" file)
+    (.append "mode" mode)))
+
+(defn import-csv
+  [{:keys [db]} [_ file mode]]
+  {:db         (-> db
+                   (assoc-in [:import :submitting?] true)
+                   (assoc-in [:import :error] nil)
+                   (assoc-in [:import :result] nil))
+   :http-xhrio {:method          :post
+                :uri             (str api-base "/products/import")
+                :body            (file->form-data file mode)
+                :response-format (ajax/json-response-format {:keywords? true})
+                :on-success      [:csv-imported]
+                :on-failure      [:csv-import-failed]}})
+
+(rf/reg-event-fx :import-csv import-csv)
+
+;; A successful import writes real products, so :fetch-products refreshes
+;; the list — same reasoning as every other successful write in this file.
+(defn csv-imported
+  [{:keys [db]} [_ result]]
+  {:db       (-> db
+                 (assoc-in [:import :submitting?] false)
+                 (assoc-in [:import :result] result))
+   :dispatch [:fetch-products]})
+
+(rf/reg-event-fx :csv-imported csv-imported)
+
+(defn csv-import-failed
+  [db [_ error]]
+  (-> db
+      (assoc-in [:import :submitting?] false)
+      (assoc-in [:import :error] (get-in error [:response :error] "Import failed."))))
+
+(rf/reg-event-db :csv-import-failed csv-import-failed)
+
+;; --- Delete product ---
+
+;; DELETE /products/{id} responds 204 No Content on success — no JSON body
+;; to parse, so text-response-format (which trivially accepts an empty
+;; string) is used instead of json-response-format here.
+(defn delete-product
+  [_ [_ id]]
+  {:http-xhrio {:method          :delete
+                :uri             (str api-base "/products/" id)
+                ;; No :params/:body here, but cljs-ajax still requires an
+                ;; explicit :format for any non-GET request (unlike GET,
+                ;; which never even tries to write a body) — omitting it
+                ;; throws "unrecognized request format" even with nothing
+                ;; to actually send.
+                :format          (ajax/text-request-format)
+                :response-format (ajax/text-response-format)
+                :on-success      [:product-deleted]
+                :on-failure      [:delete-product-failed]}})
+
+(rf/reg-event-fx :delete-product delete-product)
+
+(defn product-deleted
+  [_ _]
+  {:dispatch [:fetch-products]})
+
+(rf/reg-event-fx :product-deleted product-deleted)
+
+;; text-response-format means a failure's :response is a plain string, not a
+;; parsed map, so there's no specific backend message to pull out here —
+;; just a generic fallback, reusing the same top-level :error the product
+;; list already shows.
+(defn delete-product-failed
+  [db _]
+  (assoc db :error "Failed to delete product."))
+
+(rf/reg-event-db :delete-product-failed delete-product-failed)

@@ -17,6 +17,11 @@
    (:error db)))
 
 (rf/reg-sub
+ :products-page
+ (fn [db _]
+   (:products-page db)))
+
+(rf/reg-sub
  :product-form/submitting?
  (fn [db _]
    (get-in db [:product-form :submitting?])))
@@ -55,3 +60,18 @@
  :checkout/order
  (fn [db _]
    (get-in db [:checkout :order])))
+
+(rf/reg-sub
+ :import/submitting?
+ (fn [db _]
+   (get-in db [:import :submitting?])))
+
+(rf/reg-sub
+ :import/error
+ (fn [db _]
+   (get-in db [:import :error])))
+
+(rf/reg-sub
+ :import/result
+ (fn [db _]
+   (get-in db [:import :result])))

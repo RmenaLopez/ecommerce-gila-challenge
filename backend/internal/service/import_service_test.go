@@ -22,9 +22,13 @@ Running Shoes,RS-001,Updated,Footwear,94.99,120,0.35
 	repo := &fakeProductRepository{}
 	svc := NewImportService(repo)
 
-	result, err := svc.ImportCSV(context.Background(), strings.NewReader(csvContent))
+	result, err := svc.ImportCSV(context.Background(), strings.NewReader(csvContent), true)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !repo.receivedAddToStock {
+		t.Error("expected addToStock to be passed through to BulkUpsert unchanged")
 	}
 
 	if result.Imported != 2 { // WM-042 and RS-001 (the updated row)
@@ -73,12 +77,27 @@ func TestImportService_ImportCSV_MissingColumn(t *testing.T) {
 	repo := &fakeProductRepository{}
 	svc := NewImportService(repo)
 
-	_, err := svc.ImportCSV(context.Background(), strings.NewReader(csvContent))
+	_, err := svc.ImportCSV(context.Background(), strings.NewReader(csvContent), true)
 
 	if err == nil {
 		t.Fatal("expected an error for a CSV missing a required column")
 	}
 	if repo.bulkUpsertProducts != nil {
 		t.Error("BulkUpsert should not have been called")
+	}
+}
+
+func TestImportService_ImportCSV_PassesAddToStockFalse(t *testing.T) {
+	csvContent := "name,sku,description,category,price,stock,weight_kg\nFoo,F-1,desc,cat,10.00,5,1\n"
+
+	repo := &fakeProductRepository{}
+	svc := NewImportService(repo)
+
+	if _, err := svc.ImportCSV(context.Background(), strings.NewReader(csvContent), false); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if repo.receivedAddToStock {
+		t.Error("expected addToStock=false to be passed through to BulkUpsert unchanged")
 	}
 }

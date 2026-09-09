@@ -36,7 +36,11 @@ type pendingProduct struct {
 	line    int
 }
 
-func (s *ImportService) ImportCSV(ctx context.Context, r io.Reader) (*ImportResult, error) {
+// addToStock controls how a re-imported row's stock combines with an
+// existing product's (matched by SKU): true adds to the existing stock
+// (the default via the API — see import_handler.go), false replaces it
+// outright. New products (no existing SKU) are unaffected either way.
+func (s *ImportService) ImportCSV(ctx context.Context, r io.Reader, addToStock bool) (*ImportResult, error) {
 	csvReader := csv.NewReader(r)
 
 	header, err := csvReader.Read()
@@ -149,7 +153,7 @@ func (s *ImportService) ImportCSV(ctx context.Context, r io.Reader) (*ImportResu
 	}
 
 	if len(batch) > 0 {
-		if err := s.repo.BulkUpsert(ctx, batch); err != nil {
+		if err := s.repo.BulkUpsert(ctx, batch, addToStock); err != nil {
 			return nil, fmt.Errorf("bulk upserting imported products: %w", err)
 		}
 	}

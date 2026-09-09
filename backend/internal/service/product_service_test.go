@@ -18,6 +18,7 @@ type fakeProductRepository struct {
 	createCalled       bool
 	updateCalled       bool
 	bulkUpsertProducts []domain.Product
+	receivedAddToStock bool
 	receivedSKU        string
 }
 
@@ -37,8 +38,9 @@ func (f *fakeProductRepository) Update(ctx context.Context, p *domain.Product) e
 	return nil
 }
 func (f *fakeProductRepository) Delete(ctx context.Context, id string) error         { return nil }
-func (f *fakeProductRepository) BulkUpsert(ctx context.Context, products []domain.Product) error {
+func (f *fakeProductRepository) BulkUpsert(ctx context.Context, products []domain.Product, addToStock bool) error {
 	f.bulkUpsertProducts = products
+	f.receivedAddToStock = addToStock
 	return nil
 }
 

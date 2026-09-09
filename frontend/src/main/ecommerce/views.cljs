@@ -31,12 +31,17 @@
 ;; Reagent "form-2" component: the outer function runs once per mount,
 ;; creating `qty` fresh for this specific row. Local, not app-db — nothing
 ;; else needs to know what quantity is currently typed into one row's input.
+;; confirming? avoids a native js/confirm dialog (an in-app inline
+;; confirmation instead) — an ordinary, local, per-row bit of UI state, same
+;; reasoning as qty.
 (defn product-row [product]
-  (let [qty (r/atom 1)]
+  (let [qty         (r/atom 1)
+        confirming? (r/atom false)]
     (fn [product]
       [:tr
        [:td (:name product)]
        [:td (:sku product)]
+       [:td (:category product)]
        [:td (format-price (:price_cents product))]
        [:td (:stock product)]
        [:td
@@ -45,7 +50,14 @@
                  :value     @qty
                  :on-change (fn [e] (reset! qty (parse-int (-> e .-target .-value))))}]
         [:button {:on-click #(rf/dispatch [:add-to-cart product @qty])} "Add to cart"]]
-       [:td [:a {:href (rfe/href :products/edit {:id (:id product)})} "Edit"]]])))
+       [:td [:a {:href (rfe/href :products/edit {:id (:id product)})} "Edit"]]
+       [:td
+        (if @confirming?
+          [:span
+           "Delete this product? "
+           [:button {:on-click #(rf/dispatch [:delete-product (:id product)])} "Yes"]
+           [:button {:on-click #(reset! confirming? false)} "No"]]
+          [:button {:on-click #(reset! confirming? true)} "Delete"])]])))
 
 (defn product-list []
   (let [products @(rf/subscribe [:products])
@@ -58,7 +70,7 @@
        :else
        [:table
         [:thead
-         [:tr [:th "Name"] [:th "SKU"] [:th "Price"] [:th "Stock"] [:th "Add to cart"] [:th]]]
+         [:tr [:th "Name"] [:th "SKU"] [:th "Category"] [:th "Price"] [:th "Stock"] [:th "Add to cart"] [:th] [:th]]]
         [:tbody
          (for [product products]
            ^{:key (:id product)} [product-row product])]])]))
@@ -189,10 +201,94 @@
 
 ;; --- Pages (one per route) ---
 
+;; Reagent "form-2" component: `file` is local, per-mount state — nothing
+;; else needs to know which file is currently picked but not yet uploaded.
+(defn import-form []
+  (let [file (r/atom nil)
+        mode (r/atom "add")]
+    (fn []
+      (let [submitting? @(rf/subscribe [:import/submitting?])
+            error       @(rf/subscribe [:import/error])
+            result      @(rf/subscribe [:import/result])]
+        [:div
+         [:h3 "Import products from CSV"]
+         [:input {:type      "file"
+                  :accept    ".csv"
+                  ;; .-files is a browser FileList (array-like, not a real
+                  ;; Clojure vector) — aget reads one element out of a raw
+                  ;; JS array/array-like by index, the same idea as (nth v 0)
+                  ;; for a real Clojure vector.
+                  :on-change (fn [e] (reset! file (aget (-> e .-target .-files) 0)))}]
+         [:div
+          [:label
+           [:input {:type      "radio"
+                    :name      "import-mode"
+                    :checked   (= @mode "add")
+                    :on-change #(reset! mode "add")}]
+           "Add to existing stock"]
+          " "
+          [:label
+           [:input {:type      "radio"
+                    :name      "import-mode"
+                    :checked   (= @mode "overwrite")
+                    :on-change #(reset! mode "overwrite")}]
+           "Overwrite stock"]]
+         [:button {:on-click #(when @file (rf/dispatch [:import-csv @file @mode]))
+                    :disabled (or submitting? (nil? @file))}
+          (if submitting? "Importing..." "Import")]
+         (when error [:p {:style {:color "red"}} error])
+         (when result
+           [:div
+            [:p (str "Imported: " (:imported result) ", Skipped: " (:skipped result))]
+            (when (seq (:errors result))
+              [:ul (for [err (:errors result)]
+                     ^{:key err} [:li err])])])]))))
+
+;; Reagent "form-2": q/category here are what's currently TYPED — distinct
+;; from :products-page's q/category (the ACTIVE filters actually driving
+;; the fetch) until "Search" is clicked, same local-vs-app-db split as the
+;; create/edit form's fields. Submit-triggered, not live-search-as-you-type
+;; — see README's decisions section for why.
+(defn search-form []
+  (let [q        (r/atom "")
+        category (r/atom "")]
+    (fn []
+      [:form
+       {:on-submit (fn [e]
+                     (.preventDefault e)
+                     (rf/dispatch [:search-products @q @category]))}
+       [:input {:type        "text"
+                :placeholder "Search by name..."
+                :value       @q
+                :on-change   (fn [e] (reset! q (-> e .-target .-value)))}]
+       [:input {:type        "text"
+                :placeholder "Category"
+                :value       @category
+                :on-change   (fn [e] (reset! category (-> e .-target .-value)))}]
+       [:button {:type "submit"} "Search"]
+       [:button {:type     "button"
+                 :on-click (fn []
+                             (reset! q "")
+                             (reset! category "")
+                             (rf/dispatch [:clear-search]))}
+        "Clear"]])))
+
+;; "Next" is enabled whenever the page came back full (== limit) — the
+;; backend never reports a total count, so a full page is treated as "there
+;; might be more," the standard approach without one. Getting this wrong in
+;; the other direction (silently capping at one page with no way to reach
+;; the rest) is exactly the bug this fixes — see BUGS.md.
 (defn products-page []
-  [:div
-   [:a {:href (rfe/href :products/new)} "Add product"]
-   [product-list]])
+  (let [{:keys [limit offset]} @(rf/subscribe [:products-page])
+        products                @(rf/subscribe [:products])]
+    [:div
+     [:a {:href (rfe/href :products/new)} "Add product"]
+     [search-form]
+     [import-form]
+     [product-list]
+     [:div
+      [:button {:on-click #(rf/dispatch [:prev-page]) :disabled (zero? offset)} "Previous"]
+      [:button {:on-click #(rf/dispatch [:next-page]) :disabled (< (count products) limit)} "Next"]]]))
 
 (defn product-new-page []
   [product-form nil])
