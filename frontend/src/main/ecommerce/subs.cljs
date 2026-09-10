@@ -22,6 +22,11 @@
    (:products-page db)))
 
 (rf/reg-sub
+ :sku-lookup
+ (fn [db _]
+   (:sku-lookup db)))
+
+(rf/reg-sub
  :product-form/submitting?
  (fn [db _]
    (get-in db [:product-form :submitting?])))

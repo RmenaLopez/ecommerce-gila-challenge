@@ -27,4 +27,9 @@
    ;; search filters actually driving the current fetch — not what's
    ;; currently typed into the search form, which is its own local state
    ;; (see search-form in views.cljs) until submitted.
-   :products-page {:limit 20 :offset 0 :q "" :category ""}})
+   :products-page {:limit 20 :offset 0 :q "" :category ""}
+   ;; A SKU lookup (GET /products/sku/{sku}) is a separate, explicit action
+   ;; from name/category search — it returns exactly one exact match, not a
+   ;; filtered page, so it gets its own slice rather than folding into
+   ;; :products-page.
+   :sku-lookup {:submitting? false :error nil :product nil}})

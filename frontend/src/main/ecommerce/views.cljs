@@ -273,6 +273,35 @@
                              (rf/dispatch [:clear-search]))}
         "Clear"]])))
 
+;; A separate control from search-form, not a third field in it — a SKU
+;; lookup returns exactly one exact match (or none), not a filtered page, so
+;; it doesn't share :products-page's pagination state at all. Reuses
+;; product-row for the result, so a found product still gets full
+;; add-to-cart/edit/delete functionality, not just a read-only display.
+(defn sku-lookup-form []
+  (let [sku (r/atom "")]
+    (fn []
+      (let [{:keys [submitting? error product]} @(rf/subscribe [:sku-lookup])]
+        [:div
+         [:form
+          {:on-submit (fn [e]
+                        (.preventDefault e)
+                        (when (seq @sku) (rf/dispatch [:lookup-by-sku @sku])))}
+          [:input {:type        "text"
+                   :placeholder "Find by exact SKU..."
+                   :value       @sku
+                   :on-change   (fn [e] (reset! sku (-> e .-target .-value)))}]
+          [:button {:type "submit" :disabled submitting?}
+           (if submitting? "Looking up..." "Find")]
+          [:button {:type     "button"
+                    :on-click (fn []
+                                (reset! sku "")
+                                (rf/dispatch [:clear-sku-lookup]))}
+           "Clear"]]
+         (when error [:p {:style {:color "red"}} error])
+         (when product
+           [:table [:tbody [product-row product]]])]))))
+
 ;; "Next" is enabled whenever the page came back full (== limit) — the
 ;; backend never reports a total count, so a full page is treated as "there
 ;; might be more," the standard approach without one. Getting this wrong in
@@ -284,6 +313,7 @@
     [:div
      [:a {:href (rfe/href :products/new)} "Add product"]
      [search-form]
+     [sku-lookup-form]
      [import-form]
      [product-list]
      [:div

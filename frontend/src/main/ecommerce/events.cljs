@@ -109,6 +109,47 @@
 
 (rf/reg-event-fx :clear-search clear-search)
 
+;; A separate, explicit action from name/category search — GET
+;; /products/sku/{sku} returns exactly one exact match (or a 404), not a
+;; filtered page, so it doesn't touch :products-page at all.
+(defn lookup-by-sku
+  [{:keys [db]} [_ sku]]
+  {:db         (-> db
+                   (assoc-in [:sku-lookup :submitting?] true)
+                   (assoc-in [:sku-lookup :error] nil)
+                   (assoc-in [:sku-lookup :product] nil))
+   :http-xhrio {:method          :get
+                :uri             (str api-base "/products/sku/" (js/encodeURIComponent sku))
+                :response-format (ajax/json-response-format {:keywords? true})
+                :on-success      [:sku-found]
+                :on-failure      [:sku-lookup-failed]}})
+
+(rf/reg-event-fx :lookup-by-sku lookup-by-sku)
+
+(defn sku-found
+  [db [_ product]]
+  (-> db
+      (assoc-in [:sku-lookup :submitting?] false)
+      (assoc-in [:sku-lookup :product] product)))
+
+(rf/reg-event-db :sku-found sku-found)
+
+(defn sku-lookup-failed
+  [db [_ error]]
+  (-> db
+      (assoc-in [:sku-lookup :submitting?] false)
+      (assoc-in [:sku-lookup :error] (get-in error [:response :error] "No product found with that SKU."))))
+
+(rf/reg-event-db :sku-lookup-failed sku-lookup-failed)
+
+(defn clear-sku-lookup
+  [db _]
+  (-> db
+      (assoc-in [:sku-lookup :product] nil)
+      (assoc-in [:sku-lookup :error] nil)))
+
+(rf/reg-event-db :clear-sku-lookup clear-sku-lookup)
+
 (defn products-loaded
   [db [_ products]]
   (assoc db :products products :loading? false))
