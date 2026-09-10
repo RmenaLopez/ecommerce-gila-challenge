@@ -28,12 +28,9 @@
   (let [n (js/parseFloat s)]
     (if (js/isNaN n) 0 n)))
 
-;; Reagent "form-2" component: the outer function runs once per mount,
-;; creating `qty` fresh for this specific row. Local, not app-db — nothing
-;; else needs to know what quantity is currently typed into one row's input.
-;; confirming? avoids a native js/confirm dialog (an in-app inline
-;; confirmation instead) — an ordinary, local, per-row bit of UI state, same
-;; reasoning as qty.
+;; qty and confirming? are local, per-row state — nothing outside this row
+;; needs to know what quantity is typed in or whether it's mid-delete-confirm.
+;; confirming? avoids a native js/confirm dialog in favor of an inline one.
 (defn product-row [product]
   (let [qty         (r/atom 1)
         confirming? (r/atom false)]
@@ -150,9 +147,6 @@
    :stock       (str (:stock product))
    :weight-kg   (str (:weight_kg product))})
 
-;; e.-target.-value reads a DOM input's current text (`.-` means "read this
-;; property," as opposed to `.foo` which calls a method — see
-;; knowledge/clojurescript-syntax-basics.md for the full explanation).
 (defn- text-field [label field-key fields disabled?]
   [:div
    [:label label]
@@ -162,13 +156,10 @@
             :on-change (fn [e]
                          (swap! fields assoc field-key (-> e .-target .-value)))}]])
 
-;; Reagent "form-2" component: this outer function runs once per mount,
-;; creating `fields` fresh — pre-filled from editing-product when editing, or
-;; empty when creating. Now that create/edit each live on their own route
-;; (/products/new, /products/:id/edit), navigating between them always
-;; mounts a fresh instance of whichever page is showing, which is what
-;; resets fields correctly — the same effect the old :key-based remount
-;; achieved manually before routing existed.
+;; `fields` is created fresh per mount, pre-filled from editing-product when
+;; editing or empty when creating. Create/edit each live on their own route
+;; (/products/new, /products/:id/edit), so navigating between them always
+;; mounts a fresh instance and resets fields correctly.
 (defn product-form [editing-product]
   (let [fields (r/atom (if editing-product
                           (product->fields editing-product)
@@ -201,8 +192,8 @@
 
 ;; --- Pages (one per route) ---
 
-;; Reagent "form-2" component: `file` is local, per-mount state — nothing
-;; else needs to know which file is currently picked but not yet uploaded.
+;; `file` is local, per-mount state — nothing else needs to know which file
+;; is currently picked but not yet uploaded.
 (defn import-form []
   (let [file (r/atom nil)
         mode (r/atom "add")]
@@ -214,10 +205,6 @@
          [:h3 "Import products from CSV"]
          [:input {:type      "file"
                   :accept    ".csv"
-                  ;; .-files is a browser FileList (array-like, not a real
-                  ;; Clojure vector) — aget reads one element out of a raw
-                  ;; JS array/array-like by index, the same idea as (nth v 0)
-                  ;; for a real Clojure vector.
                   :on-change (fn [e] (reset! file (aget (-> e .-target .-files) 0)))}]
          [:div
           [:label
@@ -244,11 +231,11 @@
               [:ul (for [err (:errors result)]
                      ^{:key err} [:li err])])])]))))
 
-;; Reagent "form-2": q/category here are what's currently TYPED — distinct
-;; from :products-page's q/category (the ACTIVE filters actually driving
-;; the fetch) until "Search" is clicked, same local-vs-app-db split as the
-;; create/edit form's fields. Submit-triggered, not live-search-as-you-type
-;; — see README's decisions section for why.
+;; q/category here are what's currently TYPED — distinct from :products-page's
+;; q/category (the ACTIVE filters actually driving the fetch) until "Search"
+;; is clicked, same local-vs-app-db split as the create/edit form's fields.
+;; Submit-triggered, not live-search-as-you-type — see README's decisions
+;; section for why.
 (defn search-form []
   (let [q        (r/atom "")
         category (r/atom "")]
@@ -346,10 +333,6 @@
    " | "
    [:a {:href (rfe/href :cart)} "Cart"]])
 
-;; case matches route-name against each literal option in turn — like cond,
-;; but comparing one value against a fixed set of possibilities instead of
-;; evaluating a separate condition per branch. The final, un-paired form
-;; ([:p "Not found."]) is case's default, used when nothing else matches.
 (defn current-page []
   (let [route      @(rf/subscribe [:route])
         route-name (get-in route [:data :name])]

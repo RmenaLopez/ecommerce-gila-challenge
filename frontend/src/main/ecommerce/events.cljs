@@ -25,13 +25,10 @@
 
 (rf/reg-event-db :navigated navigated)
 
-;; A custom effect, the same idea as :dispatch or :http-xhrio but one we're
-;; registering ourselves instead of getting from re-frame or a library —
-;; reg-fx is how you teach re-frame to understand a new effect key. Handlers
-;; describe "navigate to this route" as data (:navigate! :products); this is
-;; the one place that description actually gets carried out, via reitit's
-;; own push-state function, keeping handlers themselves free of direct,
-;; imperative calls to anything.
+;; A custom effect: handlers describe "navigate to this route" as data
+;; (:navigate! :products); this is the one place that description actually
+;; gets carried out, via reitit's own push-state function, keeping handlers
+;; themselves free of direct, imperative calls to anything.
 (rf/reg-fx
  :navigate!
  (fn [route-name]
@@ -262,9 +259,7 @@
 ;; --- Checkout ---
 
 ;; POST /orders wants {:items [{:product_id ... :quantity ...} ...]}, not the
-;; {product-id {:product ... :quantity ...}} shape the cart is stored in —
-;; mapv is map's vector-returning cousin (map itself returns a lazy seq;
-;; mapv is what you want when you need a real, realized vector back).
+;; {product-id {:product ... :quantity ...}} shape the cart is stored in.
 (defn- cart->items [cart]
   (mapv (fn [[product-id line]]
           {:product_id product-id
